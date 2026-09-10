@@ -1,0 +1,522 @@
+// 数据库提供商 - 开发环境使用 SQLite
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 用户相关 ====================
+
+// 用户表
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  name          String?
+  password      String?    // 邮箱密码登录时使用
+  role          String     @default("USER") // ADMIN / USER
+  avatar        String?
+  phone         String?
+  company       String?
+  country       String?
+  // 第三方登录字段（Auth.js）
+  emailVerified DateTime?
+  image         String?
+  
+  addresses     Address[]
+  carts         Cart[]
+  orders        Order[]
+  inquiries     Inquiry[]
+  
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([email])
+  @@index([role])
+}
+
+// 收货地址
+model Address {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  firstName     String
+  lastName      String
+  company       String?
+  addressLine1  String
+  addressLine2  String?
+  city          String
+  state         String?
+  postalCode    String
+  country       String
+  phone         String
+  isDefault     Boolean  @default(false)
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([country])
+}
+
+// ==================== 产品相关 ====================
+
+// 产品分类（支持层级）
+model Category {
+  id           String    @id @default(cuid())
+  name         String
+  slug         String    @unique
+  description  String?
+  parentId     String?
+  parent       Category? @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Category[] @relation("CategoryHierarchy")
+  sortOrder    Int       @default(0)
+  image        String?
+  isActive     Boolean   @default(true)
+  
+  products     Product[]
+  
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([parentId])
+  @@index([isActive])
+}
+
+// 产品主表
+model Product {
+  id              String        @id @default(cuid())
+  name            String
+  slug            String        @unique
+  sku             String        @unique
+  categoryId      String
+  category        Category      @relation(fields: [categoryId], references: [id])
+  
+  // 价格与库存（SQLite 使用 Float 替代 Decimal）
+  price           Float
+  originalPrice   Float?        // 原价/划线价
+  costPrice       Float?        // 成本价
+  stock           Int           @default(0)
+  minOrderQty     Int           @default(1)       // 最小起订量
+  
+  // 基本信息
+  description     String?
+  shortDesc       String?                          // 简短描述
+  weight          Float?                           // 重量 kg
+  dimensions      String?                          // 尺寸
+  
+  // 状态与属性（ACTIVE/INACTIVE/DRAFT）
+  status          String        @default("ACTIVE")
+  featured        Boolean       @default(false)   // 精选/推荐
+  isNew           Boolean       @default(false)   // 新品
+  
+  // SEO
+  seoTitle        String?
+  seoDescription  String?
+  seoKeywords     String?
+  
+  // 关联
+  images          ProductImage[]
+  translations    ProductTranslation[]
+  tagRelations    ProductTagRelation[]
+  cartItems       CartItem[]
+  orderItems      OrderItem[]
+  inquiries       Inquiry[]
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([slug])
+  @@index([sku])
+  @@index([categoryId])
+  @@index([status])
+  @@index([featured])
+  @@index([price])
+  @@index([createdAt])
+}
+
+// 产品图片
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  url       String
+  altText   String?
+  sortOrder Int      @default(0)
+  isMain    Boolean  @default(false)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([sortOrder])
+}
+
+// 产品多语言翻译
+model ProductTranslation {
+  id           String   @id @default(cuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  locale       String   // 语言代码: en, zh 等
+  name         String
+  slug         String
+  description  String?
+  shortDesc    String?
+  
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([productId])
+  @@index([locale])
+  @@index([slug])
+  @@unique([productId, locale])
+}
+
+// 产品标签
+model ProductTag {
+  id         String              @id @default(cuid())
+  name       String
+  slug       String              @unique
+  
+  relations  ProductTagRelation[]
+  
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([slug])
+}
+
+// 产品-标签关联表（多对多）
+model ProductTagRelation {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       ProductTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+
+  @@index([productId])
+  @@index([tagId])
+  @@unique([productId, tagId])
+}
+
+// ==================== 购物车相关 ====================
+
+// 购物车
+model Cart {
+  id          String     @id @default(cuid())
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId   String?    // 未登录用户用 sessionId 标识
+  
+  items       CartItem[]
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+// 购物车商品
+model CartItem {
+  id         String   @id @default(cuid())
+  cartId     String
+  cart       Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  
+  quantity   Int      @default(1)
+  unitPrice  Float    // 加入购物车时的单价快照
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([cartId])
+  @@index([productId])
+  @@unique([cartId, productId])
+}
+
+// ==================== 订单相关 ====================
+
+// 订单
+model Order {
+  id               String       @id @default(cuid())
+  orderNo          String       @unique  // 订单号
+  userId           String?
+  user             User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  // 金额
+  subtotal         Float        // 商品小计
+  shippingFee      Float        @default(0) // 运费
+  taxAmount        Float        @default(0) // 税费
+  discountAmount   Float        @default(0) // 折扣
+  total            Float        // 订单总金额
+  
+  // 状态（PENDING/PAID/PROCESSING/SHIPPED/DELIVERED/CANCELLED/REFUNDED）
+  status           String       @default("PENDING")
+  paymentMethod    String?      // 支付方式
+  paidAt           DateTime?
+  
+  // 收货地址快照（下单时的地址信息）
+  shippingName     String
+  shippingPhone    String
+  shippingEmail    String?
+  shippingCompany  String?
+  shippingAddress  String       // 完整地址 JSON 或拼接字符串
+  shippingCity     String
+  shippingState    String?
+  shippingPostal   String
+  shippingCountry  String
+  
+  // 物流
+  trackingNumber   String?
+  trackingUrl      String?
+  shippedAt        DateTime?
+  deliveredAt      DateTime?
+  
+  // 备注
+  customerNote     String?
+  adminNote        String?
+  
+  items            OrderItem[]
+  
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([orderNo])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([shippingEmail])
+}
+
+// 订单商品快照
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String?  // 允许为空（产品被删除时保留快照）
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  
+  // 商品快照
+  productName String
+  productSku  String
+  productImage String?
+  unitPrice   Float    // 下单时单价
+  quantity    Int
+  subtotal    Float    // 小计
+  
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ==================== 询盘 ====================
+
+// 询盘/联系表单
+model Inquiry {
+  id         String   @id @default(cuid())
+  name       String
+  email      String
+  phone      String?
+  company    String?
+  country    String?
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  subject    String?
+  message    String
+  
+  isRead     Boolean  @default(false)
+  isReplied  Boolean  @default(false)
+  
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([email])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([country])
+}
+
+// ==================== 博客相关 ====================
+
+// 博客分类
+model BlogCategory {
+  id          String     @id @default(cuid())
+  name        String
+  slug        String     @unique
+  description String?
+  sortOrder   Int        @default(0)
+  
+  posts       BlogPost[]
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([slug])
+}
+
+// 博客文章
+model BlogPost {
+  id              String       @id @default(cuid())
+  title           String
+  slug            String       @unique
+  content         String
+  excerpt         String?
+  coverImage      String?
+  
+  categoryId      String?
+  category        BlogCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  
+  author          String?
+  isPublished     Boolean      @default(true)
+  
+  // SEO
+  seoTitle        String?
+  seoDescription  String?
+  seoKeywords     String?
+  
+  viewCount       Int          @default(0)
+  
+  // 关联
+  translations    BlogPostTranslation[]
+  tagRelations    BlogPostTagRelation[]
+  
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([isPublished])
+  @@index([createdAt])
+}
+
+// 博客文章多语言翻译
+model BlogPostTranslation {
+  id           String   @id @default(cuid())
+  postId       String
+  post         BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  
+  locale       String   // 语言代码: en, zh 等
+  title        String
+  slug         String
+  content      String
+  excerpt      String?
+  
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  seoKeywords    String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([postId])
+  @@index([locale])
+  @@index([slug])
+  @@unique([postId, locale])
+}
+
+// 博客标签
+model BlogTag {
+  id         String              @id @default(cuid())
+  name       String
+  slug       String              @unique
+  
+  relations  BlogPostTagRelation[]
+  
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([slug])
+}
+
+// 博客文章-标签关联表（多对多）
+model BlogPostTagRelation {
+  id        String   @id @default(cuid())
+  postId    String
+  post      BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+
+  @@index([postId])
+  @@index([tagId])
+  @@unique([postId, tagId])
+}
+
+// ==================== CMS 相关 ====================
+
+// 首页 Banner
+model Banner {
+  id         String   @id @default(cuid())
+  title      String
+  subtitle   String?
+  imageUrl   String
+  linkUrl    String?
+  sortOrder  Int      @default(0)
+  isActive   Boolean  @default(true)
+  
+  // 按钮文字
+  buttonText String?
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
+// 网站设置（单例模式，通常只有一条记录，id 固定）
+model SiteSetting {
+  id              String  @id @default("default")
+  siteName        String  @default("Foreign Trade Store")
+  siteDescription String?
+  siteKeywords    String?
+  logoUrl         String?
+  faviconUrl      String?
+  
+  // 联系信息
+  contactEmail    String?
+  contactPhone    String?
+  contactAddress  String?
+  
+  // 社交链接 (JSON 字符串存储)
+  socialLinks     String?
+  
+  // 支付设置 (JSON 字符串存储)
+  paymentSettings String?
+  
+  // 物流设置
+  defaultShippingFee Float?
+  freeShippingThreshold Float? // 免邮门槛
+  
+  // SEO 默认值
+  defaultSeoTitle       String?
+  defaultSeoDescription String?
+  
+  // 客服代码
+  headCode        String?  // </head> 前的代码（统计、验证等）
+  footerCode      String?  // </body> 前的代码
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
